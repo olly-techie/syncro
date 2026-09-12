@@ -1,0 +1,439 @@
+#!/bin/sh
+# SYNCRO — Wireless Android → Linux Screen Mirroring (V1 MVP).
+# Main entry point: argument parsing, initialization, orchestration, exit codes.
+# POSIX sh, shellcheck-friendly.
+#
+# Exit codes:
+#   0  success (mirroring launched, or --list/--help/--version/dry-run done)
+#   1  connection / runtime failure
+#   2  invalid arguments
+#   3  missing dependency (adb/scrcpy)
+#   4  device error (none, unauthorized, offline, ambiguous)
+#   5  scrcpy launch failure
+
+set -u
+
+# --- Resolve install layout -------------------------------------------------
+# Supports: dev checkout (bin/../lib), prefixed install (bin/../share/syncro/lib),
+# user install (~/.local/share/syncro/lib), system (/usr/local|/usr/share).
+_SYNCRO_BIN_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)"
+_SYNCRO_ROOT_CANDIDATE="$(CDPATH= cd -- "$_SYNCRO_BIN_DIR/.." 2>/dev/null && pwd)"
+if [ -f "$_SYNCRO_ROOT_CANDIDATE/lib/ui.sh" ]; then
+    SYNCRO_LIB_DIR="$_SYNCRO_ROOT_CANDIDATE/lib"
+    SYNCRO_VERSION_FILE="$_SYNCRO_ROOT_CANDIDATE/VERSION"
+elif [ -f "$_SYNCRO_ROOT_CANDIDATE/share/syncro/lib/ui.sh" ]; then
+    SYNCRO_LIB_DIR="$_SYNCRO_ROOT_CANDIDATE/share/syncro/lib"
+    SYNCRO_VERSION_FILE="$_SYNCRO_ROOT_CANDIDATE/share/syncro/VERSION"
+elif [ -f "$HOME/.local/share/syncro/lib/ui.sh" ]; then
+    SYNCRO_LIB_DIR="$HOME/.local/share/syncro/lib"
+    SYNCRO_VERSION_FILE="$HOME/.local/share/syncro/VERSION"
+elif [ -f "/usr/local/share/syncro/lib/ui.sh" ]; then
+    SYNCRO_LIB_DIR="/usr/local/share/syncro/lib"
+    SYNCRO_VERSION_FILE="/usr/local/share/syncro/VERSION"
+elif [ -f "/usr/share/syncro/lib/ui.sh" ]; then
+    SYNCRO_LIB_DIR="/usr/share/syncro/lib"
+    SYNCRO_VERSION_FILE="/usr/share/syncro/VERSION"
+else
+    SYNCRO_LIB_DIR="$_SYNCRO_ROOT_CANDIDATE/lib"
+    SYNCRO_VERSION_FILE="$_SYNCRO_ROOT_CANDIDATE/VERSION"
+fi
+unset _SYNCRO_BIN_DIR _SYNCRO_ROOT_CANDIDATE
+
+# shellcheck disable=SC1091
+. "$SYNCRO_LIB_DIR/ui.sh" || { printf 'Error: cannot load lib/ui.sh\n' >&2; exit 1; }
+# shellcheck disable=SC1091
+. "$SYNCRO_LIB_DIR/config.sh" || { printf 'Error: cannot load lib/config.sh\n' >&2; exit 1; }
+# shellcheck disable=SC1091
+. "$SYNCRO_LIB_DIR/adb.sh" || exit 1
+# shellcheck disable=SC1091
+. "$SYNCRO_LIB_DIR/device.sh" || exit 1
+# shellcheck disable=SC1091
+. "$SYNCRO_LIB_DIR/network.sh" || exit 1
+# shellcheck disable=SC1091
+. "$SYNCRO_LIB_DIR/scrcpy.sh" || exit 1
+
+SYNCRO_VERSION="0.1.0"
+if [ -f "$SYNCRO_VERSION_FILE" ]; then
+    _v="$(tr -d '[:space:]' < "$SYNCRO_VERSION_FILE" 2>/dev/null || true)"
+    [ -n "$_v" ] && SYNCRO_VERSION="$_v"
+    unset _v
+fi
+
+print_usage() {
+    cat <<'USAGE'
+SYNCRO — Wireless Android → Linux Screen Mirroring
+
+Usage:
+  syncro                          Detect, connect over Wi-Fi, mirror
+  syncro --list                   List attached Android devices
+  syncro --device <id>            Use explicit device (serial, address, or model)
+  syncro --quality low|balanced|high   Video preset (default: balanced)
+  syncro --fps 30|60              Frame-rate cap (default follows quality)
+  syncro --fullscreen             Launch scrcpy fullscreen
+  syncro --dry-run                Explain what would be done, change nothing
+  syncro --help                   Show this help
+  syncro --version                Show version
+
+Examples:
+  syncro
+  syncro --list
+  syncro --device "Pixel 8"
+  syncro --quality low --fps 30
+  syncro --quality high --fps 60 --fullscreen
+  syncro --dry-run
+
+Flow: check adb+scrcpy → detect USB/Wi-Fi → reuse known or set up
+wireless ADB over your LAN → verify → launch scrcpy.
+USAGE
+}
+
+print_version() {
+    printf 'syncro %s\n' "$SYNCRO_VERSION"
+}
+
+fail_args() {
+    ui_error "${1:-invalid arguments}" "Run: syncro --help"
+    exit 2
+}
+
+check_deps_or_exit() {
+    _missing=0
+    if ! adb_found; then
+        adb_print_missing_help
+        _missing=1
+    fi
+    if ! scrcpy_found; then
+        scrcpy_print_missing_help
+        _missing=1
+    fi
+    if [ "$_missing" = "1" ]; then
+        unset _missing
+        exit 3
+    fi
+    unset _missing
+    return 0
+}
+
+# --- Argument parsing --------------------------------------------------------
+OPT_QUALITY="balanced"
+OPT_FPS=""            # empty = follow quality default
+OPT_FPS_EXPLICIT=0
+OPT_FULLSCREEN=0
+OPT_DRYRUN=0
+OPT_LIST=0
+OPT_DEVICE=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            print_usage
+            exit 0
+            ;;
+        --version|-V)
+            print_version
+            exit 0
+            ;;
+        --list)
+            OPT_LIST=1
+            shift
+            ;;
+        --device)
+            [ $# -ge 2 ] || fail_args "Option --device requires a value."
+            case "$2" in
+                -*|"") fail_args "Option --device requires a non-empty value." ;;
+            esac
+            OPT_DEVICE="$2"
+            shift 2
+            ;;
+        --device=*)
+            OPT_DEVICE="${1#--device=}"
+            [ -n "$OPT_DEVICE" ] || fail_args "Option --device requires a value."
+            shift
+            ;;
+        --quality)
+            [ $# -ge 2 ] || fail_args "Option --quality requires a value (low|balanced|high)."
+            if ! config_validate_quality "$2" >/dev/null; then
+                fail_args "Invalid --quality '$2'. Use: low, balanced, high."
+            fi
+            OPT_QUALITY="$2"
+            shift 2
+            ;;
+        --quality=*)
+            _qv="${1#--quality=}"
+            if ! config_validate_quality "$_qv" >/dev/null; then
+                fail_args "Invalid --quality '$_qv'. Use: low, balanced, high."
+            fi
+            OPT_QUALITY="$_qv"
+            unset _qv
+            shift
+            ;;
+        --fps)
+            [ $# -ge 2 ] || fail_args "Option --fps requires a value (30|60)."
+            if ! config_validate_fps "$2" >/dev/null; then
+                fail_args "Invalid --fps '$2'. Use: 30 or 60."
+            fi
+            OPT_FPS="$2"
+            OPT_FPS_EXPLICIT=1
+            shift 2
+            ;;
+        --fps=*)
+            _fv="${1#--fps=}"
+            if ! config_validate_fps "$_fv" >/dev/null; then
+                fail_args "Invalid --fps '$_fv'. Use: 30 or 60."
+            fi
+            OPT_FPS="$_fv"
+            OPT_FPS_EXPLICIT=1
+            unset _fv
+            shift
+            ;;
+        --fullscreen)
+            OPT_FULLSCREEN=1
+            shift
+            ;;
+        --dry-run)
+            OPT_DRYRUN=1
+            shift
+            ;;
+        --)
+            shift
+            [ $# -eq 0 ] || fail_args "Unexpected argument: $1"
+            break
+            ;;
+        -*)
+            fail_args "Unknown option: $1"
+            ;;
+        *)
+            fail_args "Unexpected argument: $1"
+            ;;
+    esac
+done
+
+# Default FPS follows quality unless explicitly set.
+if [ -z "$OPT_FPS" ]; then
+    OPT_FPS="$(scrcpy_default_fps "$OPT_QUALITY")"
+fi
+
+# --- --list (needs adb only) --------------------------------------------------
+if [ "$OPT_LIST" = "1" ]; then
+    if ! adb_found; then
+        adb_print_missing_help
+        exit 3
+    fi
+    if ! config_init; then
+        ui_error "Cannot initialize config directory." "$SYNCRO_CONFIG_DIR"
+        exit 1
+    fi
+    ui_header "SYNCRO"
+    ui_info "Wireless Android → Linux"
+    printf '\n'
+    if [ "$(adb_count)" = "0" ]; then
+        ui_warn "No devices found."
+        ui_hint "Enable USB debugging, plug in via USB, authorize the PC, then re-run."
+        exit 0
+    fi
+    device_list_numbered
+    exit 0
+fi
+
+# --- Dry run: read-only, never tcpip/connect/scrcpy ---------------------------
+if [ "$OPT_DRYRUN" = "1" ]; then
+    ui_header "SYNCRO DRY RUN"
+    printf '\nDependency check:\n'
+    if adb_found; then
+        ui_ok "adb ($(adb_version 2>/dev/null || printf 'found'))"
+    else
+        ui_fail "adb (missing — see install guidance)"
+    fi
+    if scrcpy_found; then
+        ui_ok "scrcpy (found)"
+    else
+        ui_fail "scrcpy (missing — see install guidance)"
+    fi
+    printf '\nDevice:\n'
+    _dr_serial=""
+    _dr_model="unknown"
+    if [ -n "$OPT_DEVICE" ]; then
+        printf '  Requested: %s\n' "$OPT_DEVICE"
+        if adb_found; then
+            _dr_serial="$(device_match "$OPT_DEVICE" 2>/dev/null || true)"
+        fi
+        if [ -z "$_dr_serial" ]; then
+            printf '  Status: would resolve "%s" against attached + known devices\n' "$OPT_DEVICE"
+        else
+            _dr_model="$(device_model "$_dr_serial" 2>/dev/null || printf 'unknown')"
+            printf '  Resolved: %s (%s)\n' "$_dr_model" "$_dr_serial"
+        fi
+    else
+        if adb_found && [ "$(adb_count)" -ge 1 ]; then
+            _dr_serial="$(adb_list | awk '{print $1; exit}')"
+            _dr_model="$(device_model "$_dr_serial" 2>/dev/null || printf 'unknown')"
+            printf '  %s (%s)\n' "$_dr_model" "$_dr_serial"
+        else
+            printf '  (would auto-detect attached device or reuse known device)\n'
+        fi
+    fi
+    printf '\nConnection:\n'
+    if [ -n "$_dr_serial" ]; then
+        case "$(adb_transport_of "$_dr_serial")" in
+            wifi) printf '  Already wireless (%s) → would verify\n' "$_dr_serial" ;;
+            *) printf '  USB → Wi-Fi ADB (get IP → tcpip 5555 → connect → verify)\n' ;;
+        esac
+    else
+        printf '  USB → Wi-Fi ADB (or reconnect known Wi-Fi device)\n'
+    fi
+    printf '\nQuality:\n  %s\n\nFPS:\n  %s\n' "$OPT_QUALITY" "$OPT_FPS"
+    if [ "$OPT_FULLSCREEN" = "1" ]; then
+        printf '\nFullscreen:\n  yes\n'
+    fi
+    printf '\nActions:\n'
+    printf '  → check dependencies\n'
+    printf '  → detect/select device\n'
+    printf '  → configure wireless ADB (only if needed)\n'
+    printf '  → connect to device\n'
+    printf '  → verify connection\n'
+    printf '  → launch: %s\n' "$(scrcpy_build_cmd "${_dr_serial:-DEVICE}" "$OPT_QUALITY" "$OPT_FPS" "$OPT_FULLSCREEN")"
+    printf '\n(dry-run made no changes)\n'
+    unset _dr_serial _dr_model
+    exit 0
+fi
+
+# --- Normal run ----------------------------------------------------------------
+check_deps_or_exit
+
+if ! config_init; then
+    ui_error "Cannot initialize config/state directories." "Check permissions for $SYNCRO_CONFIG_DIR"
+    exit 1
+fi
+config_log "syncro $SYNCRO_VERSION start quality=$OPT_QUALITY fps=$OPT_FPS device=${OPT_DEVICE:-auto}"
+
+ui_header "SYNCRO"
+ui_info "Wireless Android → Linux"
+printf '\n'
+ui_ok "ADB detected"
+ui_ok "scrcpy detected"
+
+# 1. Resolve target device.
+TARGET_SERIAL=""
+if [ -n "$OPT_DEVICE" ]; then
+    TARGET_SERIAL="$(device_match "$OPT_DEVICE" 2>/dev/null || true)"
+    if [ -z "$TARGET_SERIAL" ]; then
+        # Maybe it's a known wireless address not currently attached → try connect first.
+        _norm="$(network_normalize_address "$OPT_DEVICE" 2>/dev/null || true)"
+        if [ -n "$_norm" ]; then
+            ui_action "Connecting to $OPT_DEVICE ..."
+            if adb_connect "$_norm"; then
+                sleep 1
+                TARGET_SERIAL="$(device_match "$_norm" 2>/dev/null || printf '%s' "$_norm")"
+            else
+                ui_error "Cannot reach device '$OPT_DEVICE'." "Same Wi-Fi as phone? See syncro troubleshooting."
+                exit 4
+            fi
+            unset _norm
+        else
+            ui_error "Device '$OPT_DEVICE' not found." "Run: syncro --list"
+            exit 4
+        fi
+    fi
+else
+    _count="$(adb_count)"
+    if [ "$_count" = "0" ]; then
+        ui_action "No USB/Wi-Fi device attached — trying known devices ..."
+        _reconnected="$(network_try_known_reconnect 2>/dev/null || true)"
+        if [ -n "$_reconnected" ]; then
+            ui_ok "Reconnected to known device ($_reconnected)"
+            TARGET_SERIAL="$(device_match "$_reconnected" 2>/dev/null || printf '%s' "$_reconnected")"
+        else
+            ui_error "No devices found." "Enable USB debugging, connect via USB, accept the authorize prompt, then run syncro again."
+            exit 4
+        fi
+        unset _reconnected
+    elif [ "$_count" = "1" ]; then
+        TARGET_SERIAL="$(adb_list | awk '{print $1; exit}')"
+    else
+        ui_warn "Multiple devices detected."
+        device_list_numbered >&2
+        printf '\n' >&2
+        TARGET_SERIAL="$(device_select_interactive || true)"
+        # device_select_interactive prints prompts to stderr; stdout carries serial.
+        # Fallback: if selection failed due to non-TTY, give actionable error.
+        if [ -z "$TARGET_SERIAL" ]; then
+            ui_error "Multiple devices — pick one explicitly." "Run: syncro --list, then syncro --device <id>"
+            exit 4
+        fi
+    fi
+    unset _count
+fi
+
+TARGET_MODEL="$(device_model "$TARGET_SERIAL" 2>/dev/null || printf 'unknown')"
+TARGET_STATUS="$(device_status "$TARGET_SERIAL" 2>/dev/null || printf '')"
+
+case "$TARGET_STATUS" in
+    device) ui_ok "Device found: $TARGET_MODEL" ;;
+    unauthorized)
+        ui_error "Device '$TARGET_MODEL' is unauthorized." "On the phone, accept the 'Allow USB debugging' prompt (check 'Always allow'), unplug/replug, then re-run."
+        exit 4
+        ;;
+    offline)
+        ui_error "Device '$TARGET_MODEL' is offline." "Unplug/replug, restart adbd, or run: adb reconnect. Then re-run syncro."
+        exit 4
+        ;;
+    "")
+        ui_error "Device '$TARGET_SERIAL' disappeared." "Reconnect it and re-run syncro."
+        exit 4
+        ;;
+    *)
+        ui_error "Device '$TARGET_MODEL' in unexpected state: $TARGET_STATUS." "Run: adb devices -l, then syncro --list."
+        exit 4
+        ;;
+esac
+
+# 2. Ensure wireless.
+MIRROR_SERIAL="$TARGET_SERIAL"
+TRANSPORT="$(device_transport "$TARGET_SERIAL")"
+WIRELESS_ADDR=""
+
+if [ "$TRANSPORT" = "wifi" ]; then
+    ui_ok "Wireless connection present ($TARGET_SERIAL)"
+    WIRELESS_ADDR="$TARGET_SERIAL"
+else
+    # Check known mapping first: maybe this USB serial was set up before.
+    _known_addr="$(known_device_lookup_serial "$TARGET_SERIAL" 2>/dev/null || true)"
+    if [ -n "$_known_addr" ]; then
+        ui_action "Known device — reconnecting to $_known_addr ..."
+        if adb_connect "$_known_addr" && adb_is_connected "$_known_addr"; then
+            ui_ok "Wireless connection established ($_known_addr)"
+            WIRELESS_ADDR="$_known_addr"
+            MIRROR_SERIAL="$_known_addr"
+        else
+            ui_warn "Known address unreachable — performing fresh USB setup."
+        fi
+    fi
+    if [ -z "$WIRELESS_ADDR" ]; then
+        ui_action "Setting up wireless ADB for $TARGET_MODEL ..."
+        _new_addr="$(network_setup_wireless_from_usb "$TARGET_SERIAL" 5555 2>/dev/null || true)"
+        if [ -z "$_new_addr" ]; then
+            ui_error "Wi-Fi ADB setup failed." "Keep USB plugged in, ensure phone + PC share the same Wi-Fi, disable AP isolation/VPN, then re-run."
+            exit 1
+        fi
+        ui_ok "Wireless connection established ($_new_addr)"
+        WIRELESS_ADDR="$_new_addr"
+        MIRROR_SERIAL="$_new_addr"
+        known_device_save "$TARGET_SERIAL" "$_new_addr" "$TARGET_MODEL" || true
+        unset _new_addr
+    fi
+    unset _known_addr
+fi
+
+# 3. Verify + launch.
+if ! adb_is_connected "$MIRROR_SERIAL"; then
+    ui_error "Wireless verification failed for $MIRROR_SERIAL." "Run: adb devices -l, check Wi-Fi, then re-run syncro."
+    exit 1
+fi
+
+ui_info "Launching mirror..."
+config_log "mirror serial=$MIRROR_SERIAL quality=$OPT_QUALITY fps=$OPT_FPS fullscreen=$OPT_FULLSCREEN"
+# shellcheck disable=SC2154
+scrcpy_launch "$MIRROR_SERIAL" "$OPT_QUALITY" "$OPT_FPS" "$OPT_FULLSCREEN"
+_rc=$?
+ui_error "Failed to launch scrcpy (exit $_rc)." "Is scrcpy installed and on PATH? Try: scrcpy --version"
+exit 5

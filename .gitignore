@@ -1,0 +1,16 @@
+# SYNCRO gitignore — keep the repo clean, never commit local state.
+*.log
+*.tmp
+*~
+.DS_Store
+
+# Local dev / install leftovers
+/tmp/
+.syncro-test-*/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
