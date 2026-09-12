@@ -37,6 +37,7 @@ It never runs `tcpip`, `connect`, or `scrcpy`.
 | `lib/network.sh` | IPv4/port/address validation, `IP`→`IP:5555` normalize, USB→Wi-Fi setup, known reconnect loop | scanning the LAN (only device-provided IPs) |
 | `lib/scrcpy.sh` | detection, `low/balanced/high` → `--max-size/--video-bit-rate`, default FPS (30/30/60), cmd build, `exec` launch | mirroring itself |
 | `lib/config.sh` | XDG dirs (`SYNCRO_CONFIG_DIR`, `SYNCRO_STATE_DIR` overridable), `known_devices` (`serial\|address\|model`), quality/FPS validators, state log | anything network/device specific |
+| `lib/os.sh` | distro detection (`ID` + `ID_LIKE`, overridable for tests), per-distro `adb`/`scrcpy` setup commands, copy-paste setup plan | installing anything itself |
 | `lib/ui.sh` | colors (TTY+NO_COLOR aware), `✓/✗/→` indicators, errors to stderr with hints, prompts | logic |
 
 ## State

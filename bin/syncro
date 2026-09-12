@@ -42,6 +42,8 @@ unset _SYNCRO_BIN_DIR _SYNCRO_ROOT_CANDIDATE
 # shellcheck disable=SC1091
 . "$SYNCRO_LIB_DIR/ui.sh" || { printf 'Error: cannot load lib/ui.sh\n' >&2; exit 1; }
 # shellcheck disable=SC1091
+. "$SYNCRO_LIB_DIR/os.sh" || { printf 'Error: cannot load lib/os.sh\n' >&2; exit 1; }
+# shellcheck disable=SC1091
 . "$SYNCRO_LIB_DIR/config.sh" || { printf 'Error: cannot load lib/config.sh\n' >&2; exit 1; }
 # shellcheck disable=SC1091
 . "$SYNCRO_LIB_DIR/adb.sh" || exit 1

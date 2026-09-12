@@ -10,14 +10,18 @@ fi
 SYNCRO_UI_LOADED=1
 
 # Colour setup: disabled when not a TTY, NO_COLOR set, or dumb terminal.
+# NOTE: escape bytes must be REAL control characters, not backslash text —
+# `printf '%s'` never interprets escapes in its arguments, so build them with
+# `printf` octal escapes here (interpreted in the format string per POSIX).
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
-    _C_RESET='\033[0m'
-    _C_BOLD='\033[1m'
-    _C_GREEN='\033[32m'
-    _C_RED='\033[31m'
-    _C_YELLOW='\033[33m'
-    _C_BLUE='\033[34m'
-    _C_CYAN='\033[36m'
+    _UI_ESC="$(printf '\033')"
+    _C_RESET="$_UI_ESC[0m"
+    _C_BOLD="$_UI_ESC[1m"
+    _C_GREEN="$_UI_ESC[32m"
+    _C_RED="$_UI_ESC[31m"
+    _C_YELLOW="$_UI_ESC[33m"
+    _C_BLUE="$_UI_ESC[34m"
+    _C_CYAN="$_UI_ESC[36m"
 else
     _C_RESET=''
     _C_BOLD=''
@@ -27,6 +31,13 @@ else
     _C_BLUE=''
     _C_CYAN=''
 fi
+unset _UI_ESC 2>/dev/null || true
+
+# Status marks as real UTF-8 bytes (octal escapes work in dash too,
+# unlike \xNN which only some shells interpret in format strings).
+_M_OK="$(printf '\342\234\223')"
+_M_FAIL="$(printf '\342\234\227')"
+_M_ARROW="$(printf '\342\206\222')"
 
 ui_header() {
     # $1 = title
@@ -40,12 +51,12 @@ ui_subheader() {
 
 ui_ok() {
     # $1 = message
-    printf '%s\xe2\x9c\x93%s %s\n' "${_C_GREEN}" "${_C_RESET}" "${1:-}"
+    printf '%s%s%s %s\n' "${_C_GREEN}" "$_M_OK" "${_C_RESET}" "${1:-}"
 }
 
 ui_fail() {
     # $1 = message (stdout)
-    printf '%s\xe2\x9c\x97%s %s\n' "${_C_RED}" "${_C_RESET}" "${1:-}"
+    printf '%s%s%s %s\n' "${_C_RED}" "$_M_FAIL" "${_C_RESET}" "${1:-}"
 }
 
 ui_warn() {
@@ -60,7 +71,7 @@ ui_info() {
 
 ui_action() {
     # $1 = message (e.g. "→ connecting...")
-    printf '%s\xe2\x86\x92%s %s\n' "${_C_BLUE}" "${_C_RESET}" "${1:-}"
+    printf '%s%s%s %s\n' "${_C_BLUE}" "$_M_ARROW" "${_C_RESET}" "${1:-}"
 }
 
 ui_error() {

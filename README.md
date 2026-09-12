@@ -38,8 +38,11 @@ sh install.sh
 syncro --help
 ```
 Ensure `~/.local/bin` is on `PATH`. Uninstall: `sh uninstall.sh`
-(`--purge` also removes config/state). Missing deps produce distro hints:
-Fedora `sudo dnf install android-tools scrcpy`,
+(`--purge` also removes config/state). The installer and all missing-dependency
+hints auto-detect your distro via `lib/os.sh` (Fedora/RHEL, Debian/Ubuntu,
+Arch, openSUSE, Gentoo, Alpine, plus derivatives through `ID_LIKE`) and print
+the exact copy-paste setup commands — e.g. on Fedora:
+`sudo dnf install android-tools` + `sudo dnf copr enable zeno/scrcpy && sudo dnf install scrcpy`.
 Debian/Ubuntu `sudo apt update && sudo apt install adb scrcpy`,
 Arch `sudo pacman -S android-tools scrcpy`.
 
@@ -124,6 +127,7 @@ sh tests/test_args.sh      # help/version/list/device/quality/fps/fullscreen/dry
 sh tests/test_device.sh    # none/usb/wifi/unauthorized/offline/multiple
 sh tests/test_config.sh    # first-run/existing/malformed/known/missing-dir
 sh tests/test_network.sh   # valid/failed/unreachable/malformed address
+sh tests/test_os.sh        # distro detection + per-distro setup commands
 ```
 Real-device integration is manual: fresh Linux + `adb`+`scrcpy`, run `syncro`,
 expect a wireless mirror; second run should reconnect without USB.

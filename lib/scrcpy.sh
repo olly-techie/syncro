@@ -14,33 +14,50 @@ scrcpy_found() {
 }
 
 scrcpy_print_missing_help() {
-    _s_os=""
-    if [ -f /etc/os-release ]; then
-        _s_os="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')"
-    fi
+    # Prints distro-specific install guidance to stderr. No auto-install.
+    # Uses lib/os.sh when loaded, otherwise falls back to /etc/os-release.
     printf 'Missing dependency: scrcpy (screen mirroring engine)\n' >&2
     printf '  Why: performs the actual video mirroring.\n' >&2
-    case "$_s_os" in
-        fedora*|rhel*|centos*|rocky*|alma*)
-            printf '  Install: sudo dnf install scrcpy\n' >&2
-            ;;
-        ubuntu*|debian*|linuxmint*|pop*)
-            printf '  Install: sudo apt update && sudo apt install scrcpy\n' >&2
-            ;;
-        arch*|manjaro*|endeavour*)
-            printf '  Install: sudo pacman -S scrcpy\n' >&2
-            ;;
-        opensuse*)
-            printf '  Install: sudo zypper install scrcpy\n' >&2
-            ;;
-        *)
-            printf '  Install (Fedora): sudo dnf install scrcpy\n' >&2
+    if type os_scrcpy_install_cmd >/dev/null 2>&1; then
+        _s_cmd="$(os_scrcpy_install_cmd 2>/dev/null || true)"
+        _s_note="$(os_scrcpy_note 2>/dev/null || true)"
+        if [ -n "$_s_cmd" ]; then
+            printf '  Install (%s): %s\n' "$(os_id)" "$_s_cmd" >&2
+            [ -n "$_s_note" ] && printf '  Note: %s\n' "$_s_note" >&2
+        else
+            printf '  Install (Fedora): sudo dnf copr enable zeno/scrcpy && sudo dnf install scrcpy\n' >&2
             printf '  Install (Debian/Ubuntu): sudo apt update && sudo apt install scrcpy\n' >&2
             printf '  Install (Arch): sudo pacman -S scrcpy\n' >&2
-            ;;
-    esac
+        fi
+        unset _s_cmd _s_note
+    else
+        _s_os=""
+        if [ -f /etc/os-release ]; then
+            _s_os="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')"
+        fi
+        case "$_s_os" in
+            fedora*|rhel*|centos*|rocky*|alma*)
+                printf '  Install: sudo dnf copr enable zeno/scrcpy && sudo dnf install scrcpy\n' >&2
+                printf '  (scrcpy is not in the default Fedora repos; the zeno/scrcpy COPR is the upstream-documented source)\n' >&2
+                ;;
+            ubuntu*|debian*|linuxmint*|pop*)
+                printf '  Install: sudo apt update && sudo apt install scrcpy\n' >&2
+                ;;
+            arch*|manjaro*|endeavour*)
+                printf '  Install: sudo pacman -S scrcpy\n' >&2
+                ;;
+            opensuse*)
+                printf '  Install: sudo zypper install scrcpy\n' >&2
+                ;;
+            *)
+                printf '  Install (Fedora): sudo dnf copr enable zeno/scrcpy && sudo dnf install scrcpy\n' >&2
+                printf '  Install (Debian/Ubuntu): sudo apt update && sudo apt install scrcpy\n' >&2
+                printf '  Install (Arch): sudo pacman -S scrcpy\n' >&2
+                ;;
+        esac
+        unset _s_os
+    fi
     printf '  Then re-run: syncro\n' >&2
-    unset _s_os
 }
 
 scrcpy_quality_args() {

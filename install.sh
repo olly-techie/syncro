@@ -42,7 +42,7 @@ mkdir -p "$PREFIX/bin" || { printf 'Error: cannot create %s\n' "$PREFIX/bin" >&2
 mkdir -p "$LIB_DST" || { printf 'Error: cannot create %s\n' "$LIB_DST" >&2; exit 1; }
 
 # Copy lib files (only known syncro modules — never wipe unrelated files).
-for _f in ui.sh config.sh adb.sh device.sh network.sh scrcpy.sh; do
+for _f in ui.sh os.sh config.sh adb.sh device.sh network.sh scrcpy.sh; do
     if [ ! -f "$LIB_SRC/$_f" ]; then printf 'Error: missing lib/%s\n' "$_f" >&2; exit 1; fi
     cp -f "$LIB_SRC/$_f" "$LIB_DST/$_f" || { printf 'Error: copy failed for %s\n' "$_f" >&2; exit 1; }
     chmod 644 "$LIB_DST/$_f" || true
@@ -62,13 +62,24 @@ printf '  %s/ (lib + VERSION)\n' "$SHARE_DST"
 printf 'Config:   ${XDG_CONFIG_HOME:-$HOME/.config}/syncro/\n'
 printf 'State:    ${XDG_STATE_HOME:-$HOME/.local/state}/syncro/\n'
 
-# Dependency notice (never auto-install).
-if ! command -v adb >/dev/null 2>&1; then
-    printf 'NOTE: adb not found — install it (Fedora: sudo dnf install android-tools).\n'
+# Dependency notice (never auto-install). Distro-aware via lib/os.sh.
+_missing_dep=0
+command -v adb >/dev/null 2>&1 || _missing_dep=1
+command -v scrcpy >/dev/null 2>&1 || _missing_dep=1
+if [ "$_missing_dep" = "1" ]; then
+    if [ -f "$SRC_DIR/lib/os.sh" ]; then
+        # shellcheck disable=SC1091
+        . "$SRC_DIR/lib/os.sh" || true
+    fi
+    if type os_setup_plan >/dev/null 2>&1; then
+        printf 'Missing dependencies — suitable setup commands for your distro:\n'
+        os_setup_plan
+    else
+        printf 'NOTE: adb not found — install it (Fedora: sudo dnf install android-tools).\n'
+        printf 'NOTE: scrcpy not found — install it (Fedora: sudo dnf copr enable zeno/scrcpy && sudo dnf install scrcpy).\n'
+    fi
 fi
-if ! command -v scrcpy >/dev/null 2>&1; then
-    printf 'NOTE: scrcpy not found — install it (Fedora: sudo dnf install scrcpy).\n'
-fi
+unset _missing_dep
 
 # PATH hint (do not modify rc files automatically).
 case ":$PATH:" in

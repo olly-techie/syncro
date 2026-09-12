@@ -11,7 +11,8 @@ Practical fixes. Run `syncro --dry-run` first to preview, and
 - Then: `adb version` should succeed; re-run `syncro`.
 
 ## scrcpy not found (exit 3)
-- Fedora: `sudo dnf install scrcpy`
+- Fedora: `sudo dnf copr enable zeno/scrcpy && sudo dnf install scrcpy`
+  (not in default repos; `zeno/scrcpy` is the upstream-documented COPR)
 - Debian/Ubuntu: `sudo apt update && sudo apt install scrcpy`
 - Arch: `sudo pacman -S scrcpy`
 - Then: `scrcpy --version`; re-run `syncro`.

@@ -20,34 +20,46 @@ adb_version() {
 
 adb_print_missing_help() {
     # Prints distro-specific install guidance to stderr. No auto-install.
-    _os_id=""
-    if [ -f /etc/os-release ]; then
-        # shellcheck disable=SC1091
-        _os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')"
-    fi
+    # Uses lib/os.sh when loaded, otherwise falls back to /etc/os-release.
     printf 'Missing dependency: adb (Android Platform Tools)\n' >&2
     printf '  Why: required to detect and connect to your Android device.\n' >&2
-    case "$_os_id" in
-        fedora*|rhel*|centos*|rocky*|alma*)
-            printf '  Install: sudo dnf install android-tools\n' >&2
-            ;;
-        ubuntu*|debian*|linuxmint*|pop*)
-            printf '  Install: sudo apt update && sudo apt install adb\n' >&2
-            ;;
-        arch*|manjaro*|endeavour*)
-            printf '  Install: sudo pacman -S android-tools\n' >&2
-            ;;
-        opensuse*)
-            printf '  Install: sudo zypper install android-tools\n' >&2
-            ;;
-        *)
+    if type os_adb_install_cmd >/dev/null 2>&1; then
+        _adb_cmd="$(os_adb_install_cmd 2>/dev/null || true)"
+        if [ -n "$_adb_cmd" ]; then
+            printf '  Install (%s): %s\n' "$(os_id)" "$_adb_cmd" >&2
+        else
             printf '  Install (Fedora): sudo dnf install android-tools\n' >&2
             printf '  Install (Debian/Ubuntu): sudo apt update && sudo apt install adb\n' >&2
             printf '  Install (Arch): sudo pacman -S android-tools\n' >&2
-            ;;
-    esac
+        fi
+        unset _adb_cmd
+    else
+        _os_id=""
+        if [ -f /etc/os-release ]; then
+            _os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')"
+        fi
+        case "$_os_id" in
+            fedora*|rhel*|centos*|rocky*|alma*)
+                printf '  Install: sudo dnf install android-tools\n' >&2
+                ;;
+            ubuntu*|debian*|linuxmint*|pop*)
+                printf '  Install: sudo apt update && sudo apt install adb\n' >&2
+                ;;
+            arch*|manjaro*|endeavour*)
+                printf '  Install: sudo pacman -S android-tools\n' >&2
+                ;;
+            opensuse*)
+                printf '  Install: sudo zypper install android-tools\n' >&2
+                ;;
+            *)
+                printf '  Install (Fedora): sudo dnf install android-tools\n' >&2
+                printf '  Install (Debian/Ubuntu): sudo apt update && sudo apt install adb\n' >&2
+                printf '  Install (Arch): sudo pacman -S android-tools\n' >&2
+                ;;
+        esac
+        unset _os_id
+    fi
     printf '  Then re-run: syncro\n' >&2
-    unset _os_id
 }
 
 adb_devices_raw() {
@@ -92,16 +104,16 @@ adb_transport_of() {
 }
 
 adb_get_model() {
-    # $1 = serial; prints model or "unknown". Strips CR.
+    # $1 = serial; prints model, or nothing + rc 1 when unavailable.
+    # (Callers print the "unknown" fallback — never print it here, or it
+    # stacks with theirs, e.g. "unknownunknown".)
     _gm_serial="${1:-}"
     if [ -z "$_gm_serial" ]; then
-        printf 'unknown'
         unset _gm_serial
         return 1
     fi
     _gm_model="$("$ADB_BIN" -s "$_gm_serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     if [ -z "$_gm_model" ]; then
-        printf 'unknown'
         unset _gm_serial _gm_model
         return 1
     fi

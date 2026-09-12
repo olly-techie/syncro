@@ -21,6 +21,7 @@ Thanks for helping keep SYNCRO fast, local, and lightweight.
    sh tests/test_device.sh
    sh tests/test_config.sh
    sh tests/test_network.sh
+   sh tests/test_os.sh
    ```
    Plus `shellcheck bin/syncro lib/*.sh install.sh uninstall.sh` if available.
 5. Update `CHANGELOG.md` and docs when behavior changes.

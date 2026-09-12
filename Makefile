@@ -24,6 +24,7 @@ test: check
 	sh tests/test_device.sh
 	sh tests/test_config.sh
 	sh tests/test_network.sh
+	sh tests/test_os.sh
 
 install:
 	sh install.sh --prefix="$(PREFIX)"
