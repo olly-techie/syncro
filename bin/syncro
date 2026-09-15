@@ -352,15 +352,24 @@ else
     elif [ "$_count" = "1" ]; then
         TARGET_SERIAL="$(adb_list | awk '{print $1; exit}')"
     else
-        ui_warn "Multiple devices detected."
-        device_list_numbered >&2
-        printf '\n' >&2
-        TARGET_SERIAL="$(device_select_interactive || true)"
-        # device_select_interactive prints prompts to stderr; stdout carries serial.
-        # Fallback: if selection failed due to non-TTY, give actionable error.
-        if [ -z "$TARGET_SERIAL" ]; then
-            ui_error "Multiple devices — pick one explicitly." "Run: syncro --list, then syncro --device <id>"
-            exit 4
+        # Same phone via USB + Wi-Fi shows as 2 adb rows — collapse to one
+        # and prefer Wi-Fi instead of confusing users with a prompt.
+        _auto="$(device_preferred_serial 2>/dev/null || true)"
+        if [ -n "$_auto" ]; then
+            ui_ok "Same device via USB + Wi-Fi — using Wi-Fi ($_auto)"
+            TARGET_SERIAL="$_auto"
+            unset _auto
+        else
+            ui_warn "Multiple devices detected."
+            device_list_numbered >&2
+            printf '\n' >&2
+            TARGET_SERIAL="$(device_select_interactive || true)"
+            # device_select_interactive prints prompts to stderr; stdout carries serial.
+            # Fallback: if selection failed due to non-TTY, give actionable error.
+            if [ -z "$TARGET_SERIAL" ]; then
+                ui_error "Multiple devices — pick one explicitly." "Run: syncro --list, then syncro --device <id>"
+                exit 4
+            fi
         fi
     fi
     unset _count
