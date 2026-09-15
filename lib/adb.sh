@@ -123,32 +123,101 @@ adb_get_model() {
 }
 
 adb_get_ip() {
-    # $1 = serial; prints first valid IPv4 found via device, return 0/1.
+    # $1 = serial; prints best Wi-Fi IPv4 found via device, return 0/1.
+    # Prefers wlan0 (Wi-Fi) over cellular (rmnet/seth_lte/ccmni/...) because
+    # `ip route | head -n1` on dual-transport phones returns the mobile-data
+    # src first, which is unreachable from the PC's LAN.
     _gi_serial="${1:-}"
     if [ -z "$_gi_serial" ]; then
         unset _gi_serial
         return 1
     fi
-    # Strategy 1: `ip route` → look for "src <ip>".
+    # Strategy 1: wlan0 address directly (most reliable for Wi-Fi ADB).
+    _gi_wlan="$("$ADB_BIN" -s "$_gi_serial" shell ip -f inet addr show wlan0 2>/dev/null | tr -d '\r' || true)"
+    _gi_ip="$(printf '%s' "$_gi_wlan" | grep -o 'inet [0-9][0-9./]*' 2>/dev/null | head -n1 | awk '{print $2}' | cut -d/ -f1)"
+    if [ -n "$_gi_ip" ]; then
+        case "$_gi_ip" in
+            127.*) _gi_ip="" ;;
+            *)
+                if _gi_is_ipv4 "$_gi_ip"; then
+                    printf '%s' "$_gi_ip"
+                    unset _gi_serial _gi_wlan _gi_ip
+                    return 0
+                fi
+                _gi_ip=""
+                ;;
+        esac
+    fi
+    # Strategy 2: `ip route` — prefer wlan0/Wi-Fi lines first.
     _gi_route="$("$ADB_BIN" -s "$_gi_serial" shell ip route 2>/dev/null | tr -d '\r' || true)"
+    # 2a: first src on a wlan/wifi line.
+    _gi_ip="$(printf '%s' "$_gi_route" | grep -i 'wlan\|wifi' 2>/dev/null | grep -o 'src [0-9][0-9.]*' 2>/dev/null | head -n1 | awk '{print $2}')"
+    if [ -n "$_gi_ip" ]; then
+        case "$_gi_ip" in
+            127.*) _gi_ip="" ;;
+            *)
+                if _gi_is_ipv4 "$_gi_ip"; then
+                    printf '%s' "$_gi_ip"
+                    unset _gi_serial _gi_wlan _gi_ip _gi_route
+                    return 0
+                fi
+                _gi_ip=""
+                ;;
+        esac
+    fi
+    # 2b: first src on a non-cellular, non-loopback line.
+    _gi_ip="$(printf '%s' "$_gi_route" | grep -v -i 'rmnet\|seth_\|ccmni\|qmap\|dummy\| lo \| lo$\|127\.' 2>/dev/null | grep -o 'src [0-9][0-9.]*' 2>/dev/null | head -n1 | awk '{print $2}')"
+    if [ -n "$_gi_ip" ]; then
+        case "$_gi_ip" in
+            127.*) _gi_ip="" ;;
+            *)
+                if _gi_is_ipv4 "$_gi_ip"; then
+                    printf '%s' "$_gi_ip"
+                    unset _gi_serial _gi_wlan _gi_ip _gi_route
+                    return 0
+                fi
+                _gi_ip=""
+                ;;
+        esac
+    fi
+    # 2c: last-resort first src (old behavior, minus loopback).
     _gi_ip="$(printf '%s' "$_gi_route" | grep -o 'src [0-9][0-9.]*' 2>/dev/null | head -n1 | awk '{print $2}')"
     if [ -n "$_gi_ip" ]; then
         case "$_gi_ip" in
             127.*) _gi_ip="" ;;
-            *) printf '%s' "$_gi_ip"; unset _gi_serial _gi_route _gi_ip; return 0 ;;
+            *)
+                if _gi_is_ipv4 "$_gi_ip"; then
+                    printf '%s' "$_gi_ip"
+                    unset _gi_serial _gi_wlan _gi_ip _gi_route
+                    return 0
+                fi
+                ;;
         esac
     fi
-    # Strategy 2: wlan0 address.
-    _gi_wlan="$("$ADB_BIN" -s "$_gi_serial" shell ip -f inet addr show wlan0 2>/dev/null | tr -d '\r' || true)"
-    _gi_ip2="$(printf '%s' "$_gi_wlan" | grep -o 'inet [0-9][0-9./]*' 2>/dev/null | head -n1 | awk '{print $2}' | cut -d/ -f1)"
-    if [ -n "$_gi_ip2" ]; then
-        case "$_gi_ip2" in
-            127.*) ;;
-            *) printf '%s' "$_gi_ip2"; unset _gi_serial _gi_route _gi_ip _gi_wlan _gi_ip2; return 0 ;;
-        esac
-    fi
-    unset _gi_serial _gi_route _gi_ip _gi_wlan _gi_ip2
+    unset _gi_serial _gi_route _gi_ip _gi_wlan
     return 1
+}
+
+# Minimal IPv4 sanity check for use before lib/network.sh is sourced.
+# (network_valid_ipv4 lives in network.sh; adb.sh must not require it.)
+_gi_valid_fallback() {
+    case "${1:-}" in
+        *.*.*.*) ;;
+        *) return 1 ;;
+    esac
+    case "$1" in
+        *[!0-9.]*) return 1 ;;
+    esac
+    return 0
+}
+
+_gi_is_ipv4() {
+    if type network_valid_ipv4 >/dev/null 2>&1; then
+        network_valid_ipv4 "$1" 2>/dev/null
+        return $?
+    fi
+    _gi_valid_fallback "$1"
+    return $?
 }
 
 adb_tcpip_enable() {
@@ -169,12 +238,21 @@ adb_tcpip_enable() {
 
 adb_connect() {
     # $1 = address (IP:PORT); returns 0 if output contains "connected".
+    # Stale known_devices entries (old subnet) make plain `adb connect` hang
+    # for 20s+; wrap with `timeout` when available so reconnect fails fast
+    # and bin/syncro can fall through to fresh USB setup. Override with
+    # SYNCRO_CONNECT_TIMEOUT (seconds, 0 = no timeout).
     _cn_addr="${1:-}"
     if [ -z "$_cn_addr" ]; then
         unset _cn_addr
         return 1
     fi
-    _cn_out="$("$ADB_BIN" connect "$_cn_addr" 2>&1 || true)"
+    : "${SYNCRO_CONNECT_TIMEOUT:=15}"
+    if [ "${SYNCRO_CONNECT_TIMEOUT:-15}" != "0" ] && command -v timeout >/dev/null 2>&1; then
+        _cn_out="$(timeout "$SYNCRO_CONNECT_TIMEOUT" "$ADB_BIN" connect "$_cn_addr" 2>&1 || true)"
+    else
+        _cn_out="$("$ADB_BIN" connect "$_cn_addr" 2>&1 || true)"
+    fi
     case "$_cn_out" in
         *connected*)
             unset _cn_addr _cn_out

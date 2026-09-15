@@ -77,6 +77,18 @@ MOCK_NO_IP=1; export MOCK_NO_IP
 network_setup_wireless_from_usb "USB004" 5555 >/dev/null 2>&1; assert_fail "missing IP fails gracefully" "$?"
 unset MOCK_NO_IP
 
+# --- dual-transport: cellular + Wi-Fi must prefer Wi-Fi ---
+: > "$MOCK_STATE/log"
+printf 'USB005\tdevice\n' > "$MOCK_STATE/devices"
+MOCK_ROUTE_DUAL=1; export MOCK_ROUTE_DUAL
+dual_ip="$(adb_get_ip "USB005" 2>/dev/null)"; rc=$?
+assert_ok "dual-transport get_ip succeeds" "$rc"
+assert_eq "dual-transport prefers wlan0" "192.168.19.195" "$dual_ip"
+dual_addr="$(network_setup_wireless_from_usb "USB005" 5555 2>/dev/null)"; rc=$?
+assert_ok "dual-transport wireless setup succeeds" "$rc"
+assert_eq "dual-transport wireless addr" "192.168.19.195:5555" "$dual_addr"
+unset MOCK_ROUTE_DUAL
+
 # --- malformed address connect ---
 adb_connect "not-an-address" >/dev/null 2>&1
 # mock stub would "connect" to anything; guard is validation layer:

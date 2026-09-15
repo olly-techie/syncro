@@ -100,7 +100,11 @@ device_list_numbered() {
         return 1
     fi
     # Use temp file to avoid subshell counter issue.
-    _ln_tmp="/tmp/syncro-devlist.$$"
+    if command -v mktemp >/dev/null 2>&1; then
+        _ln_tmp="$(mktemp "${TMPDIR:-/tmp}/syncro-devlist.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/syncro-devlist.$$")"
+    else
+        _ln_tmp="${TMPDIR:-/tmp}/syncro-devlist.$$"
+    fi
     printf '%s\n' "$_ln_list" > "$_ln_tmp"
     while IFS="	" read -r _ln_serial _ln_status <&3; do
         [ -n "$_ln_serial" ] || continue

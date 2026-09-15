@@ -99,10 +99,12 @@ case "$mode" in
                 exit 0 ;;
             *"ip route"*)
                 if [ "${MOCK_NO_IP:-0}" = "1" ]; then printf '\n'; exit 0; fi
+                if [ "${MOCK_ROUTE_DUAL:-0}" = "1" ]; then printf '10.0.0.0/8 dev seth_lte8 proto kernel scope link src 10.239.197.123\n192.168.19.0/24 dev wlan0 proto kernel scope link src 192.168.19.195\n'; exit 0; fi
                 printf 'default via 192.168.1.1 dev wlan0 proto dhcp src 192.168.1.42 metric 300\n'
                 exit 0 ;;
             *"addr show"*)
                 if [ "${MOCK_NO_IP:-0}" = "1" ]; then printf '\n'; exit 0; fi
+                if [ "${MOCK_ROUTE_DUAL:-0}" = "1" ]; then printf '28: wlan0: <UP> mtu 1500\n    inet 192.168.19.195/24 brd 192.168.19.255 scope global wlan0\n'; exit 0; fi
                 printf '3: wlan0: <UP> mtu 1500\n    inet 192.168.1.42/24 brd 192.168.1.255 scope global wlan0\n'
                 exit 0 ;;
             *) printf '\n'; exit 0 ;;

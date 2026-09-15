@@ -149,7 +149,11 @@ network_try_known_reconnect() {
     if [ ! -f "${SYNCRO_KNOWN_DEVICES_FILE:-}" ]; then
         return 1
     fi
-    _kr_tmp="/tmp/syncro-known.$$"
+    if command -v mktemp >/dev/null 2>&1; then
+        _kr_tmp="$(mktemp "${TMPDIR:-/tmp}/syncro-known.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/syncro-known.$$")"
+    else
+        _kr_tmp="${TMPDIR:-/tmp}/syncro-known.$$"
+    fi
     known_device_list > "$_kr_tmp" 2>/dev/null || { rm -f "$_kr_tmp" 2>/dev/null || true; unset _kr_tmp; return 1; }
     while IFS='|' read -r _kr_serial _kr_addr _kr_model; do
         [ -n "$_kr_addr" ] || continue
