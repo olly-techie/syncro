@@ -103,7 +103,11 @@ scrcpy_build_cmd() {
 }
 
 scrcpy_launch() {
-    # $1=serial $2=quality $3=fps $4=fullscreen → execs scrcpy (no return on success).
+    # $1=serial $2=quality $3=fps $4=fullscreen → runs scrcpy and returns its
+    # exit status (0 = mirror ended cleanly). Does NOT exec: bin/syncro needs
+    # the status to map a failed launch onto exit code 5. `exec` would replace
+    # the shell, making every statement after the call unreachable and leaking
+    # scrcpy's raw exit code to the caller instead.
     _sl_serial="${1:-}"
     _sl_quality="${2:-balanced}"
     _sl_fps="${3:-30}"
@@ -121,9 +125,8 @@ scrcpy_launch() {
     if [ "$_sl_fs" = "1" ]; then
         set -- "$@" --fullscreen
     fi
-    # shellcheck disable=SC2271
-    exec "$SCRCPY_BIN" "$@"
-    # exec failed
+    "$SCRCPY_BIN" "$@"
+    _sl_rc=$?
     unset _sl_serial _sl_quality _sl_fps _sl_fs
-    return 127
+    return "$_sl_rc"
 }

@@ -98,6 +98,20 @@ assert_eq "--device (no value) exits 2" "2" "$rc"
 sh "$ROOT/bin/syncro" extra-positional >/dev/null 2>&1; rc=$?
 assert_eq "positional arg exits 2" "2" "$rc"
 
+# scrcpy launch exit codes (README: 0 ok, 5 scrcpy launch failure).
+# scrcpy_launch must not exec, or the caller's error handling is dead code
+# and scrcpy's raw status leaks out instead of 5.
+printf 'LAUNCH123\tdevice\n' > "$MOCK_STATE/devices"
+out="$(sh "$ROOT/bin/syncro" --device LAUNCH123 2>&1)"; rc=$?
+assert_eq "successful launch exits 0" "0" "$rc"
+out="$(MOCK_SCRCPY_RC=1 sh "$ROOT/bin/syncro" --device LAUNCH123 2>&1)"; rc=$?
+assert_eq "scrcpy failure exits 5" "5" "$rc"
+assert_contains "scrcpy failure explains" "$out" "Failed to launch scrcpy"
+out="$(MOCK_SCRCPY_RC=130 sh "$ROOT/bin/syncro" --device LAUNCH123 2>&1)"; rc=$?
+assert_eq "scrcpy Ctrl-C exits 0" "0" "$rc"
+assert_eq "scrcpy Ctrl-C not reported as error" "0" \
+    "$(printf '%s' "$out" | grep -c 'Failed to launch' || true)"
+
 # missing dep → exit 3 (empty PATH without adb)
 OLD_PATH="$PATH"
 PATH="/usr/bin:/bin"

@@ -446,5 +446,12 @@ config_log "mirror serial=$MIRROR_SERIAL quality=$OPT_QUALITY fps=$OPT_FPS fulls
 # shellcheck disable=SC2154
 scrcpy_launch "$MIRROR_SERIAL" "$OPT_QUALITY" "$OPT_FPS" "$OPT_FULLSCREEN"
 _rc=$?
+if [ "$_rc" -eq 0 ]; then
+    exit 0
+fi
+# 130 = SIGINT (128+2): user closed the mirror with Ctrl-C. Not a failure.
+if [ "$_rc" -eq 130 ]; then
+    exit 0
+fi
 ui_error "Failed to launch scrcpy (exit $_rc)." "Is scrcpy installed and on PATH? Try: scrcpy --version"
 exit 5
