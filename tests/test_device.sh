@@ -42,6 +42,30 @@ set_devices ""
 assert_eq "no device count=0" "0" "$(adb_count)"
 adb_status_of "ANY" >/dev/null 2>&1; assert_fail "no device status lookup fails" "$?"
 
+# adb daemon banner on stdout must not be parsed as devices
+# (`adb devices` prints "* daemon not running..." before the header).
+BANNER_BIN="$TDIR/banner-bin"
+mkdir -p "$BANNER_BIN"
+cat > "$BANNER_BIN/adb" <<'STUB'
+#!/bin/sh
+if [ "$1" = "devices" ]; then
+    printf '* daemon not running; starting now at tcp:5037\n'
+    printf '* daemon started successfully\n'
+    printf 'List of devices attached\n'
+    printf 'ABC123\tdevice\n'
+    exit 0
+fi
+exit 0
+STUB
+chmod +x "$BANNER_BIN/adb"
+_banner_path="$PATH"
+PATH="$BANNER_BIN:$PATH"
+assert_eq "daemon banner ignored: count" "1" "$(adb_count)"
+assert_eq "daemon banner ignored: list" "ABC123	device" "$(adb_list)"
+PATH="$_banner_path"
+unset _banner_path
+rm -rf "$BANNER_BIN"
+
 # authorized USB device
 set_devices "ABC123\tdevice\n"
 printf 'TECNO KM4' > "$MOCK_STATE/model_ABC123"

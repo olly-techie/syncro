@@ -63,8 +63,17 @@ adb_print_missing_help() {
 }
 
 adb_devices_raw() {
-    # Raw `adb devices` output minus header. Never fails hard (empty on error).
-    "$ADB_BIN" devices 2>/dev/null | tail -n +2 | grep -v '^[[:space:]]*$' || true
+    # Raw `adb devices` output minus header and any daemon banner. Never fails
+    # hard (empty on error).
+    # `adb devices` may print banner lines to stdout before the header, e.g.
+    #   * daemon not running; starting now at tcp:5037
+    #   * daemon started successfully
+    #   List of devices attached
+    # so anchor on the header instead of blindly dropping line 1.
+    "$ADB_BIN" devices 2>/dev/null |
+        sed -n '/^[[:space:]]*List of devices attached/,$p' |
+        sed '1d' |
+        grep -v '^[[:space:]]*$' || true
 }
 
 adb_list() {
