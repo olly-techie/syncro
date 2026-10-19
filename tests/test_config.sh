@@ -22,6 +22,37 @@ config_init; assert_ok "first-run config_init" "$?"
 [ -d "$TDIR/config" ]; assert_ok "config dir exists" "$?"
 [ -f "$TDIR/config/known_devices" ]; assert_ok "known_devices created" "$?"
 
+# file permissions: known_devices and the run log must be owner-only.
+# SECURITY.md and architecture.md both document 600, but `: > file` under a
+# default umask produced 644. Runs in a subshell with its own dirs so the rest
+# of the suite keeps its fixtures; results are reported back as key=value.
+_modes="$(mktemp -d /tmp/syncro-modes.XXXXXX)"
+(
+    SYNCRO_CONFIG_DIR="$_modes/config"
+    SYNCRO_STATE_DIR="$_modes/state"
+    export SYNCRO_CONFIG_DIR SYNCRO_STATE_DIR
+    SYNCRO_KNOWN_DEVICES_FILE="$SYNCRO_CONFIG_DIR/known_devices"
+    SYNCRO_LOG_FILE="$SYNCRO_STATE_DIR/syncro.log"
+    config_init >/dev/null 2>&1
+    printf 'first=%s\n' "$(ls -l "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null | cut -c1-10 | tr -d ' ')"
+    known_device_save "MODETEST" "10.9.9.9:5555" "Phone" >/dev/null 2>&1
+    printf 'saved=%s\n' "$(ls -l "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null | cut -c1-10 | tr -d ' ')"
+    chmod 644 "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null
+    config_init >/dev/null 2>&1
+    printf 'retightened=%s\n' "$(ls -l "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null | cut -c1-10 | tr -d ' ')"
+    printf 'cfgdir=%s\n' "$(ls -ld "$SYNCRO_CONFIG_DIR" 2>/dev/null | cut -c1-10 | tr -d ' ')"
+    config_log "mode test" >/dev/null 2>&1
+    printf 'log=%s\n' "$(ls -l "$SYNCRO_LOG_FILE" 2>/dev/null | cut -c1-10 | tr -d ' ')"
+) > "$_modes/out" 2>/dev/null
+_mode_of() { grep "^$1=" "$_modes/out" 2>/dev/null | cut -d= -f2- ; }
+assert_eq "known_devices is 600 on first run" "-rw-------" "$(_mode_of first)"
+assert_eq "known_devices stays 600 after save" "-rw-------" "$(_mode_of saved)"
+assert_eq "pre-existing 644 is tightened to 600" "-rw-------" "$(_mode_of retightened)"
+assert_eq "config dir is 700" "drwx------" "$(_mode_of cfgdir)"
+assert_eq "run log is 600" "-rw-------" "$(_mode_of log)"
+rm -rf "$_modes"
+unset _modes
+
 # quality / fps validation
 config_validate_quality "low" >/dev/null; assert_ok "quality low ok" "$?"
 config_validate_quality "balanced" >/dev/null; assert_ok "quality balanced ok" "$?"

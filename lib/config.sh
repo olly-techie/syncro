@@ -27,10 +27,16 @@ config_init() {
     fi
     # Tighten config dir perms (best effort, ignore failure).
     chmod 700 "$SYNCRO_CONFIG_DIR" 2>/dev/null || true
+    chmod 700 "$SYNCRO_STATE_DIR" 2>/dev/null || true
     # Ensure known-devices file exists.
     if [ ! -f "$SYNCRO_KNOWN_DEVICES_FILE" ]; then
-        : > "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || return 1
+        # Create with restrictive perms from the start. `: > file` inherits the
+        # umask (typically 0644), which contradicted the documented 600 and
+        # left the file world-readable until the first known_device_save.
+        (umask 077 && : > "$SYNCRO_KNOWN_DEVICES_FILE") 2>/dev/null || return 1
     fi
+    # Enforce 600 even if the file already existed with looser perms.
+    chmod 600 "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || true
     return 0
 }
 
@@ -81,17 +87,20 @@ known_device_save() {
     [ -n "$_ks_addr" ] || { unset _ks_serial _ks_addr _ks_model; return 1; }
 
     if [ ! -f "$SYNCRO_KNOWN_DEVICES_FILE" ]; then
-        : > "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || { unset _ks_serial _ks_addr _ks_model; return 1; }
+        (umask 077 && : > "$SYNCRO_KNOWN_DEVICES_FILE") 2>/dev/null ||
+            { unset _ks_serial _ks_addr _ks_model; return 1; }
     fi
     # Remove any existing entry for this serial or address, then append.
     # Compare fields with awk (exact string equality) rather than grep patterns:
     # serials/addresses contain '.' and can contain other regex metacharacters,
     # so `grep "^AB.1|"` also matches ABX1 — which silently deleted unrelated
     # rows. Values go via ENVIRON because `awk -v` interprets backslash escapes.
+    # umask 077 so the intermediate file never exists world-readable, not even
+    # briefly between creation and the chmod after mv.
     _ks_tmp="$SYNCRO_KNOWN_DEVICES_FILE.tmp.$$"
-    SYNCRO_KD_SERIAL="$_ks_serial" SYNCRO_KD_ADDR="$_ks_addr" \
+    (umask 077 && SYNCRO_KD_SERIAL="$_ks_serial" SYNCRO_KD_ADDR="$_ks_addr" \
         awk -F'|' '!($1 == ENVIRON["SYNCRO_KD_SERIAL"] || $2 == ENVIRON["SYNCRO_KD_ADDR"])' \
-        "$SYNCRO_KNOWN_DEVICES_FILE" > "$_ks_tmp" 2>/dev/null || true
+        "$SYNCRO_KNOWN_DEVICES_FILE" > "$_ks_tmp") 2>/dev/null || true
     printf '%s|%s|%s\n' "$_ks_serial" "$_ks_addr" "$_ks_model" >> "$_ks_tmp"
     if mv "$_ks_tmp" "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null; then
         chmod 600 "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || true
@@ -155,7 +164,13 @@ config_log() {
     _log_msg="${1:-}"
     [ -n "$_log_msg" ] || { unset _log_msg; return 0; }
     mkdir -p "$SYNCRO_STATE_DIR" 2>/dev/null || { unset _log_msg; return 0; }
+    chmod 700 "$SYNCRO_STATE_DIR" 2>/dev/null || true
+    # Log records serials + IPs; keep it owner-only like known_devices.
+    if [ ! -f "$SYNCRO_LOG_FILE" ]; then
+        (umask 077 && : > "$SYNCRO_LOG_FILE") 2>/dev/null || true
+    fi
     printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || printf 'unknown-time')" "$_log_msg" >> "$SYNCRO_LOG_FILE" 2>/dev/null || true
+    chmod 600 "$SYNCRO_LOG_FILE" 2>/dev/null || true
     unset _log_msg
     return 0
 }
