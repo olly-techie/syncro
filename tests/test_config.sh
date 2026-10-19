@@ -44,6 +44,22 @@ assert_eq "lookup updated addr" "192.168.1.50:5555" "$(known_device_lookup_seria
 lines="$(known_device_list | grep -c '^ABC123|' || true)"
 assert_eq "no duplicate serial rows" "1" "$lines"
 
+# regex metacharacters in serial/address must not act as wildcards.
+# Previously `grep "^AB.1|"` also matched ABX1, and saving "AB.1" deleted
+# the unrelated ABX1 row entirely. Operates on a scratch file so the
+# surrounding cases keep their fixtures.
+KD_SCRATCH="$TDIR/known_scratch"
+cp "$TDIR/config/known_devices" "$KD_SCRATCH"
+: > "$TDIR/config/known_devices"
+known_device_save "ABX1" "192.168.1.9:5555" "Other"
+known_device_save "AB.1" "192.168.1.5:5555" "Dotted"
+assert_eq "dot serial lookup" "192.168.1.5:5555" "$(known_device_lookup_serial "AB.1")"
+assert_eq "dot-free serial survives" "192.168.1.9:5555" "$(known_device_lookup_serial "ABX1")"
+assert_eq "dot address lookup" "AB.1" "$(known_device_lookup_address "192.168.1.5:5555")"
+known_device_lookup_address "192.168.1.9:5555" >/dev/null; assert_ok "unrelated addr still resolves" "$?"
+assert_eq "no collateral row deletion" "2" "$(known_device_list | grep -c '|' || true)"
+cp "$KD_SCRATCH" "$TDIR/config/known_devices"
+
 # malformed config: blank lines, comments, garbage — list must skip blanks/comments, lookups must not crash
 printf '\n# comment line\nGARBAGE-NO-DELIM\nDEF456|192.168.1.60:5555|Phone X\n' >> "$TDIR/config/known_devices"
 known_device_lookup_serial "DEF456" >/dev/null; assert_ok "lookup after malformed ok" "$?"

@@ -84,8 +84,14 @@ known_device_save() {
         : > "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || { unset _ks_serial _ks_addr _ks_model; return 1; }
     fi
     # Remove any existing entry for this serial or address, then append.
+    # Compare fields with awk (exact string equality) rather than grep patterns:
+    # serials/addresses contain '.' and can contain other regex metacharacters,
+    # so `grep "^AB.1|"` also matches ABX1 — which silently deleted unrelated
+    # rows. Values go via ENVIRON because `awk -v` interprets backslash escapes.
     _ks_tmp="$SYNCRO_KNOWN_DEVICES_FILE.tmp.$$"
-    grep -v "^${_ks_serial}|" "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null | grep -v "|${_ks_addr}|" > "$_ks_tmp" 2>/dev/null || true
+    SYNCRO_KD_SERIAL="$_ks_serial" SYNCRO_KD_ADDR="$_ks_addr" \
+        awk -F'|' '!($1 == ENVIRON["SYNCRO_KD_SERIAL"] || $2 == ENVIRON["SYNCRO_KD_ADDR"])' \
+        "$SYNCRO_KNOWN_DEVICES_FILE" > "$_ks_tmp" 2>/dev/null || true
     printf '%s|%s|%s\n' "$_ks_serial" "$_ks_addr" "$_ks_model" >> "$_ks_tmp"
     if mv "$_ks_tmp" "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null; then
         chmod 600 "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || true
@@ -105,7 +111,8 @@ known_device_lookup_serial() {
         unset _kl_serial
         return 1
     fi
-    _kl_line="$(grep -m1 "^${_kl_serial}|" "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || true)"
+    _kl_line="$(SYNCRO_KD_KEY="$_kl_serial" awk -F'|' '$1 == ENVIRON["SYNCRO_KD_KEY"] { print; exit }' \
+        "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || true)"
     if [ -z "$_kl_line" ]; then
         unset _kl_serial _kl_line
         return 1
@@ -123,7 +130,8 @@ known_device_lookup_address() {
         unset _ka_addr
         return 1
     fi
-    _ka_line="$(grep -m1 "|${_ka_addr}|" "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || true)"
+    _ka_line="$(SYNCRO_KD_KEY="$_ka_addr" awk -F'|' '$2 == ENVIRON["SYNCRO_KD_KEY"] { print; exit }' \
+        "$SYNCRO_KNOWN_DEVICES_FILE" 2>/dev/null || true)"
     if [ -z "$_ka_line" ]; then
         unset _ka_addr _ka_line
         return 1
